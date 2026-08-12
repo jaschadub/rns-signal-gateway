@@ -4,6 +4,10 @@ Bidirectional text bridge between [Reticulum](https://reticulum.network)
 (LXMF) and [Signal](https://signal.org) via
 [signal-cli](https://github.com/AsamK/signal-cli)'s JSON-RPC/SSE HTTP API.
 
+**Status**: text and image/file bridging verified end-to-end in both
+directions (2026-08-12) on a live deployment — Sideband over a Reticulum
+TCP backbone on one side, a linked personal Signal account on the other.
+
 Maps Signal groups to lists of LXMF destinations ("channels"):
 
 ```text
