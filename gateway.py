@@ -106,6 +106,12 @@ def lxmf_attachments(message_fields, max_bytes):
     image = fields.get(LXMF.FIELD_IMAGE)
     if isinstance(image, (list, tuple)) and len(image) >= 2 and image[1]:
         out.append((f"image.{image[0]}", image[1]))
+    audio = fields.get(LXMF.FIELD_AUDIO)
+    if isinstance(audio, (list, tuple)) and len(audio) >= 2 and audio[1]:
+        # opus modes (>= AM_OPUS_OGG) are ogg containers Signal can play;
+        # codec2 modes are raw low-bitrate radio audio, forwarded as .c2
+        ext = "ogg" if audio[0] >= LXMF.AM_OPUS_OGG else "c2"
+        out.append((f"voice.{ext}", audio[1]))
     for att in fields.get(LXMF.FIELD_FILE_ATTACHMENTS) or []:
         if isinstance(att, (list, tuple)) and len(att) >= 2 and att[1]:
             out.append((str(att[0]) or "file", att[1]))

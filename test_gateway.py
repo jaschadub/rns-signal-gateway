@@ -78,6 +78,14 @@ kept, notes = lxmf_attachments({LXMF.FIELD_IMAGE: ["webp", b"12345"],
                                     [["big.bin", b"123456789"]]}, 5)
 assert kept == [("image.webp", b"12345")]
 assert notes == ["[dropped big.bin: 9 B over 5 B limit]"]
+
+# voice memos: opus -> playable ogg, codec2 -> raw .c2
+kept, _ = lxmf_attachments({LXMF.FIELD_AUDIO: [LXMF.AM_OPUS_OGG, b"OGGDATA"]},
+                           100)
+assert kept == [("voice.ogg", b"OGGDATA")]
+kept, _ = lxmf_attachments({LXMF.FIELD_AUDIO: [LXMF.AM_CODEC2_1200, b"C2"]},
+                           100)
+assert kept == [("voice.c2", b"C2")]
 assert lxmf_attachments(None, 5) == ([], [])
 assert lxmf_attachments({LXMF.FIELD_FILE_ATTACHMENTS:
                          [["../evil", b"x"]]}, 5)[0] == [("evil", b"x")]
