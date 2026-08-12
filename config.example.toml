@@ -12,6 +12,10 @@ announce_interval = 3600     # seconds between LXMF announces
 # in Sideband's voice UI. Needs ffmpeg + pycodec2. Omit to pass audio
 # through as files.
 # voice_to_codec2 = 2400
+# Downscale/recompress Signal images to WebP under this size before
+# bridging (needs Pillow). Omit to only shrink images that exceed
+# max_attachment_bytes. Can be overridden per channel.
+# image_max_bytes = 262144
 
 [signal]
 rpc_url = "http://127.0.0.1:7583"
@@ -31,3 +35,5 @@ members = [
     # and are the only sources allowed to post into the group.
     "a91d0000000000000000000000000000",
 ]
+# open = true            # allow LXMF users to /join this channel themselves
+# image_max_bytes = 32768  # tighter image budget for a LoRa-bound channel

@@ -83,19 +83,57 @@ def parse_signal_event(event, own_account):
             attachments)
 
 
-def attachment_fields(loaded, voice_codec2_bitrate=None):
+def shrink_image(data, max_bytes):
+    """Recompress (and if needed downscale) an image to WebP under max_bytes.
+
+    Returns WebP bytes, or None if Pillow is missing or the data isn't a
+    decodable image. Always terminates: dimensions halve each round.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        while True:
+            buf = io.BytesIO()
+            img.save(buf, "WEBP", quality=75)
+            if buf.tell() <= max_bytes or min(img.size) <= 32:
+                return buf.getvalue()
+            img = img.resize((max(img.width // 2, 16),
+                              max(img.height // 2, 16)))
+    except Exception as e:  # noqa: BLE001 - undecodable input falls through
+        RNS.log(f"Image downscale failed ({e})", RNS.LOG_VERBOSE)
+        return None
+
+
+def attachment_fields(loaded, max_bytes, voice_codec2_bitrate=None,
+                      image_max_bytes=None):
     """Build LXMF fields from [(filename, content_type, bytes), ...].
 
-    The first image becomes FIELD_IMAGE (rendered inline by Sideband) and,
-    when voice_codec2_bitrate is set, the first audio attachment is
-    transcoded to a codec2 FIELD_AUDIO (tiny, plays in Sideband's voice
-    UI, LoRa-friendly). Everything else becomes FIELD_FILE_ATTACHMENTS.
+    Returns (fields, notes). The first image becomes FIELD_IMAGE (rendered
+    inline by Sideband), downscaled to image_max_bytes (or max_bytes) when
+    it doesn't already fit. When voice_codec2_bitrate is set, the first
+    audio attachment is transcoded to a codec2 FIELD_AUDIO (tiny, plays in
+    Sideband's voice UI, LoRa-friendly). Everything else becomes
+    FIELD_FILE_ATTACHMENTS; anything still over max_bytes is dropped with
+    a note.
     """
     fields = {}
     files = []
+    notes = []
     for name, ctype, data in loaded:
         ext = os.path.splitext(name)[1].lstrip(".").lower()
         if ctype.startswith("image/") and LXMF.FIELD_IMAGE not in fields:
+            budget = image_max_bytes or max_bytes
+            if len(data) > budget:
+                shrunk = shrink_image(data, budget)
+                if shrunk is not None:
+                    data, ext = shrunk, "webp"
+            if len(data) > max_bytes:
+                notes.append(f"[dropped {name}: {len(data)} B over "
+                             f"{max_bytes} B limit]")
+                continue
             fields[LXMF.FIELD_IMAGE] = [ext or ctype.split("/", 1)[1], data]
             continue
         if (ctype.startswith("audio/") and voice_codec2_bitrate
@@ -105,10 +143,14 @@ def attachment_fields(loaded, voice_codec2_bitrate=None):
                 fields[LXMF.FIELD_AUDIO] = [
                     AM_FOR_BITRATE[voice_codec2_bitrate], c2]
                 continue
+        if len(data) > max_bytes:
+            notes.append(f"[dropped {name}: {len(data)} B over "
+                         f"{max_bytes} B limit]")
+            continue
         files.append([os.path.basename(name), data])
     if files:
         fields[LXMF.FIELD_FILE_ATTACHMENTS] = files
-    return fields
+    return fields, notes
 
 
 def lxmf_attachments(message_fields, max_bytes):
@@ -244,11 +286,59 @@ def channel_for_group(cfg, group_id):
     return None
 
 
-def channel_for_member(cfg, lxmf_hash):
+def channel_for_member(cfg, lxmf_hash, dynamic=None):
     for ch in cfg["channels"]:
-        if lxmf_hash in ch["members"]:
+        if (lxmf_hash in ch["members"]
+                or lxmf_hash in (dynamic or {}).get(ch["name"], [])):
             return ch
     return None
+
+
+def command_reply(cfg, dynamic, sender, text):
+    """Handle a /command from an LXMF user. Returns (reply, changed).
+
+    Mutates `dynamic` ({channel_name: [hash, ...]}) in place; `changed`
+    tells the caller to persist it. Only channels marked `open = true` in
+    the config accept /join — deny by default holds for the rest.
+    """
+    parts = text.split()
+    cmd, arg = parts[0].lower(), (parts[1] if len(parts) > 1 else None)
+    by_name = {c["name"]: c for c in cfg["channels"]}
+
+    if cmd == "/join" and arg:
+        ch = by_name.get(arg)
+        if ch is None:
+            return f"No such channel: {arg}", False
+        if sender in ch["members"] or sender in dynamic.get(arg, []):
+            return f"Already a member of {arg}", False
+        if not ch.get("open"):
+            return f"Channel {arg} is closed; ask the operator", False
+        dynamic.setdefault(arg, []).append(sender)
+        return f"Joined {arg}", True
+
+    if cmd == "/leave" and arg:
+        joined = dynamic.get(arg, [])
+        if sender in joined:
+            joined.remove(sender)
+            return f"Left {arg}", True
+        if arg in by_name and sender in by_name[arg]["members"]:
+            return ((f"You are in {arg} via the gateway config; "
+                     f"ask the operator to remove you"), False)
+        return f"Not a member of {arg}", False
+
+    if cmd in ("/channels", "/list"):
+        lines = []
+        for ch in cfg["channels"]:
+            if (sender in ch["members"]
+                    or sender in dynamic.get(ch["name"], [])):
+                status = "member"
+            else:
+                status = "open" if ch.get("open") else "closed"
+            lines.append(f"{ch['name']} ({status})")
+        return "\n".join(lines) or "No channels configured", False
+
+    return ("Commands: /join <channel>, /leave <channel>, /channels",
+            False)
 
 
 # ---------- gateway ----------
@@ -282,9 +372,26 @@ class Gateway:
             identity,
             display_name=cfg["gateway"].get("display_name", "Signal Gateway"),
         )
+        self.members_path = os.path.join(storage, "members.json")
+        self.dynamic_members = {}
+        if os.path.isfile(self.members_path):
+            with open(self.members_path) as f:
+                self.dynamic_members = json.load(f)
+
         self.router.register_delivery_callback(self.on_lxmf)
         RNS.log(f"Gateway LXMF address: {RNS.prettyhexrep(self.dest.hash)}",
                 RNS.LOG_NOTICE)
+
+    def save_members(self):
+        tmp = self.members_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.dynamic_members, f, indent=2)
+        os.replace(tmp, self.members_path)
+
+    def channel_members(self, channel):
+        joined = self.dynamic_members.get(channel["name"], [])
+        return channel["members"] + [m for m in joined
+                                     if m not in channel["members"]]
 
     # ----- Signal side -----
 
@@ -326,6 +433,10 @@ class Gateway:
                         RNS.LOG_WARNING)
                 time.sleep(5)
 
+    # sanity cap on reading attachment files into memory; size policy
+    # (drop vs downscale vs transcode) is applied in attachment_fields()
+    ATTACHMENT_LOAD_CAP = 32_000_000
+
     def load_signal_attachments(self, attachments):
         """Read attachment files signal-cli stored; returns (loaded, notes)."""
         loaded, notes = [], []
@@ -336,10 +447,9 @@ class Gateway:
             if not path or not os.path.isfile(path):
                 notes.append(f"[attachment {name} unavailable]")
                 continue
-            size = os.path.getsize(path)
-            if size > self.max_attachment_bytes:
-                notes.append(f"[dropped {name}: {size} B over "
-                             f"{self.max_attachment_bytes} B limit]")
+            if os.path.getsize(path) > self.ATTACHMENT_LOAD_CAP:
+                notes.append(f"[dropped {name}: exceeds "
+                             f"{self.ATTACHMENT_LOAD_CAP} B]")
                 continue
             with open(path, "rb") as f:
                 loaded.append((name, att.get("contentType") or "", f.read()))
@@ -368,15 +478,20 @@ class Gateway:
                 source, timestamp, text + attachment_sig(loaded))):
             return
 
+        fields, field_notes = attachment_fields(
+            loaded, self.max_attachment_bytes,
+            self.cfg["gateway"].get("voice_to_codec2"),
+            channel.get("image_max_bytes")
+            or self.cfg["gateway"].get("image_max_bytes"))
+        notes += field_notes
+        members = self.channel_members(channel)
         RNS.log(f"Bridging Signal message from {source} "
                 f"({len(loaded)} attachment(s)) to "
-                f"{len(channel['members'])} LXMF member(s) on "
+                f"{len(members)} LXMF member(s) on "
                 f"'{channel['name']}'", RNS.LOG_INFO)
         body = "\n".join(p for p in [f"[Signal {name}] {text}".rstrip(),
                                      *notes] if p)
-        fields = attachment_fields(
-            loaded, self.cfg["gateway"].get("voice_to_codec2"))
-        for member in channel["members"]:
+        for member in members:
             threading.Thread(target=self.send_lxmf,
                              args=(member, body, fields),
                              daemon=True).start()
@@ -391,21 +506,30 @@ class Gateway:
 
     def handle_lxmf(self, message):
         sender = message.source_hash.hex()
-        channel = channel_for_member(self.cfg, sender)
-        if channel is None:  # deny by default
+        text = message.content.decode("utf-8", "replace").strip()
+        channel = channel_for_member(self.cfg, sender, self.dynamic_members)
+        if channel is None and not text.startswith("/"):  # deny by default
             RNS.log(f"Dropping LXMF message from non-member {sender}",
                     RNS.LOG_VERBOSE)
             return
         if not message.signature_validated:
-            RNS.log(f"Dropping LXMF message from member {sender} without "
+            RNS.log(f"Dropping LXMF message from {sender} without "
                     f"validated signature (no announce seen yet?)",
                     RNS.LOG_WARNING)
+            return
+        if text.startswith("/"):
+            reply, changed = command_reply(self.cfg, self.dynamic_members,
+                                           sender, text)
+            if changed:
+                self.save_members()
+            RNS.log(f"Command from {sender}: {text.split()[0]}", RNS.LOG_INFO)
+            threading.Thread(target=self.send_lxmf, args=(sender, reply),
+                             daemon=True).start()
             return
         if len(message.content) > self.max_bytes:
             RNS.log(f"Dropping oversize LXMF message ({len(message.content)} "
                     f"bytes) from {sender}", RNS.LOG_WARNING)
             return
-        text = message.content.decode("utf-8", "replace").strip()
         attachments, notes = lxmf_attachments(message.fields,
                                               self.max_attachment_bytes)
         if not text and not attachments and not notes:
