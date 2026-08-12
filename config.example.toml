@@ -7,6 +7,11 @@ storage = "/var/lib/rns-signal"
 max_message_bytes = 4096     # drop larger text (LoRa-friendly)
 max_attachment_bytes = 1000000  # drop larger attachments, keep the text
 announce_interval = 3600     # seconds between LXMF announces
+# Transcode Signal voice notes to codec2 FIELD_AUDIO at this bitrate
+# (450/700/1200/1300/1400/1600/2400/3200) — tiny and LoRa-friendly, plays
+# in Sideband's voice UI. Needs ffmpeg + pycodec2. Omit to pass audio
+# through as files.
+# voice_to_codec2 = 2400
 
 [signal]
 rpc_url = "http://127.0.0.1:7583"

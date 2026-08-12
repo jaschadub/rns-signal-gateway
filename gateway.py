@@ -8,13 +8,16 @@ and LXMF messages from members are posted into the Signal group.
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
 import urllib.request
+import wave
 
 import LXMF
 import RNS
@@ -80,11 +83,13 @@ def parse_signal_event(event, own_account):
             attachments)
 
 
-def attachment_fields(loaded):
+def attachment_fields(loaded, voice_codec2_bitrate=None):
     """Build LXMF fields from [(filename, content_type, bytes), ...].
 
-    The first image becomes FIELD_IMAGE (rendered inline by Sideband);
-    everything else becomes FIELD_FILE_ATTACHMENTS.
+    The first image becomes FIELD_IMAGE (rendered inline by Sideband) and,
+    when voice_codec2_bitrate is set, the first audio attachment is
+    transcoded to a codec2 FIELD_AUDIO (tiny, plays in Sideband's voice
+    UI, LoRa-friendly). Everything else becomes FIELD_FILE_ATTACHMENTS.
     """
     fields = {}
     files = []
@@ -92,8 +97,15 @@ def attachment_fields(loaded):
         ext = os.path.splitext(name)[1].lstrip(".").lower()
         if ctype.startswith("image/") and LXMF.FIELD_IMAGE not in fields:
             fields[LXMF.FIELD_IMAGE] = [ext or ctype.split("/", 1)[1], data]
-        else:
-            files.append([os.path.basename(name), data])
+            continue
+        if (ctype.startswith("audio/") and voice_codec2_bitrate
+                and LXMF.FIELD_AUDIO not in fields):
+            c2 = audio_to_codec2(data, voice_codec2_bitrate)
+            if c2 is not None:
+                fields[LXMF.FIELD_AUDIO] = [
+                    AM_FOR_BITRATE[voice_codec2_bitrate], c2]
+                continue
+        files.append([os.path.basename(name), data])
     if files:
         fields[LXMF.FIELD_FILE_ATTACHMENTS] = files
     return fields
@@ -108,10 +120,17 @@ def lxmf_attachments(message_fields, max_bytes):
         out.append((f"image.{image[0]}", image[1]))
     audio = fields.get(LXMF.FIELD_AUDIO)
     if isinstance(audio, (list, tuple)) and len(audio) >= 2 and audio[1]:
-        # opus modes (>= AM_OPUS_OGG) are ogg containers Signal can play;
-        # codec2 modes are raw low-bitrate radio audio, forwarded as .c2
-        ext = "ogg" if audio[0] >= LXMF.AM_OPUS_OGG else "c2"
-        out.append((f"voice.{ext}", audio[1]))
+        if audio[0] >= LXMF.AM_OPUS_OGG:
+            # opus modes are ogg containers Signal plays natively
+            out.append(("voice.ogg", audio[1]))
+        else:
+            # codec2: raw low-bitrate radio audio; transcode to WAV if
+            # pycodec2 is installed, else forward raw
+            decoded = codec2_to_wav(audio[0], audio[1])
+            if decoded is not None:
+                out.append(("voice.wav", decoded))
+            else:
+                out.append(("voice.c2", audio[1]))
     for att in fields.get(LXMF.FIELD_FILE_ATTACHMENTS) or []:
         if isinstance(att, (list, tuple)) and len(att) >= 2 and att[1]:
             out.append((str(att[0]) or "file", att[1]))
@@ -123,6 +142,82 @@ def lxmf_attachments(message_fields, max_bytes):
         else:
             kept.append((os.path.basename(name), data))
     return kept, notes
+
+
+CODEC2_BITRATES = {
+    LXMF.AM_CODEC2_450PWB: 450, LXMF.AM_CODEC2_450: 450,
+    LXMF.AM_CODEC2_700C: 700, LXMF.AM_CODEC2_1200: 1200,
+    LXMF.AM_CODEC2_1300: 1300, LXMF.AM_CODEC2_1400: 1400,
+    LXMF.AM_CODEC2_1600: 1600, LXMF.AM_CODEC2_2400: 2400,
+    LXMF.AM_CODEC2_3200: 3200,
+}
+
+AM_FOR_BITRATE = {
+    450: LXMF.AM_CODEC2_450, 700: LXMF.AM_CODEC2_700C,
+    1200: LXMF.AM_CODEC2_1200, 1300: LXMF.AM_CODEC2_1300,
+    1400: LXMF.AM_CODEC2_1400, 1600: LXMF.AM_CODEC2_1600,
+    2400: LXMF.AM_CODEC2_2400, 3200: LXMF.AM_CODEC2_3200,
+}
+
+
+def audio_to_codec2(data, bitrate):
+    """Transcode any ffmpeg-readable audio to raw codec2 frames.
+
+    Optional feature: requires ffmpeg and pycodec2. Returns None on any
+    failure so callers can fall back to passing the original through.
+    """
+    if bitrate not in AM_FOR_BITRATE:
+        return None
+    try:
+        import numpy as np
+        import pycodec2
+        pcm = subprocess.run(
+            ["ffmpeg", "-v", "quiet", "-i", "pipe:0",
+             "-f", "s16le", "-ar", "8000", "-ac", "1", "pipe:1"],
+            input=data, capture_output=True, check=True, timeout=60).stdout
+        codec = pycodec2.Codec2(bitrate)
+        frame_len = codec.samples_per_frame() * 2
+        out = bytearray()
+        for i in range(0, len(pcm) - frame_len + 1, frame_len):
+            samples = np.frombuffer(pcm[i:i + frame_len], dtype=np.int16)
+            out += codec.encode(samples)
+        return bytes(out) or None
+    except Exception as e:  # noqa: BLE001 - fall back to passthrough
+        RNS.log(f"codec2 encode unavailable/failed ({e}), passing audio "
+                f"through", RNS.LOG_VERBOSE)
+        return None
+
+
+def codec2_to_wav(mode, data):
+    """Decode raw codec2 frames to WAV bytes; None if not decodable here.
+
+    Optional feature: requires pycodec2 (which needs libcodec2).
+    """
+    bitrate = CODEC2_BITRATES.get(mode)
+    if bitrate is None:
+        return None
+    try:
+        import pycodec2
+        codec = pycodec2.Codec2(bitrate)
+        frame_bytes = codec.bytes_per_frame()
+        pcm = bytearray()
+        for i in range(0, len(data) - frame_bytes + 1, frame_bytes):
+            pcm += codec.decode(data[i:i + frame_bytes]).tobytes()
+        if not pcm:
+            return None
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            # ponytail: 8 kHz for all modes; 450PWB is nominally 16 kHz and
+            # will play slow — special-case it if anyone actually uses it
+            wav.setframerate(8000)
+            wav.writeframes(bytes(pcm))
+        return buf.getvalue()
+    except Exception as e:  # noqa: BLE001 - fall back to raw .c2 forwarding
+        RNS.log(f"codec2 transcode unavailable/failed ({e}), "
+                f"forwarding raw", RNS.LOG_VERBOSE)
+        return None
 
 
 def attachment_sig(items):
@@ -279,7 +374,8 @@ class Gateway:
                 f"'{channel['name']}'", RNS.LOG_INFO)
         body = "\n".join(p for p in [f"[Signal {name}] {text}".rstrip(),
                                      *notes] if p)
-        fields = attachment_fields(loaded)
+        fields = attachment_fields(
+            loaded, self.cfg["gateway"].get("voice_to_codec2"))
         for member in channel["members"]:
             threading.Thread(target=self.send_lxmf,
                              args=(member, body, fields),

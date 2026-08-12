@@ -30,6 +30,15 @@ Signal group  <->  signal-cli  <->  gateway  <->  LXMF  <->  Reticulum users
   attachments. Oversize attachments are dropped with a note in the bridged
   text, so radio-bound channels can set a small cap without losing the
   conversation.
+- Voice memos bridge both ways. Reticulum → Signal: Opus voice arrives as
+  a playable `.ogg`; codec2 voice is decoded to a playable `.wav` when
+  `pycodec2` is installed (raw `.c2` otherwise). Signal → Reticulum: set
+  `voice_to_codec2 = 2400` (or another codec2 bitrate) to turn Signal
+  voice notes into tiny codec2 `FIELD_AUDIO` messages that play in
+  Sideband's voice UI and fit LoRa links; without it, audio passes through
+  as files. Voice transcoding needs `ffmpeg` on the PATH and
+  `pip install pycodec2` (which needs libcodec2, e.g.
+  `apt install libcodec2-dev`).
 
 ## Requirements
 
@@ -315,3 +324,5 @@ Image downscaling/recompression for radio-bound channels (attachments are
 currently passed through as-is under the size cap), reactions, delivery
 receipts, `/join`-style self-service membership over LXMF, per-user 1:1
 mapping, and a Signal command console (`/rns-status`, `/rns-send ...`).
+Codec2 450PWB voice currently decodes at 8 kHz (plays slow); special-case
+it if anyone uses it.

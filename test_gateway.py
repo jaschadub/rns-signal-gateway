@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Self-check for gateway routing/dedup/parsing logic. Run: python3 test_gateway.py"""
 
+import shutil
+
 import LXMF
 
 from gateway import (
@@ -79,13 +81,35 @@ kept, notes = lxmf_attachments({LXMF.FIELD_IMAGE: ["webp", b"12345"],
 assert kept == [("image.webp", b"12345")]
 assert notes == ["[dropped big.bin: 9 B over 5 B limit]"]
 
-# voice memos: opus -> playable ogg, codec2 -> raw .c2
+# voice memos: opus -> playable ogg, undecodable codec2 -> raw .c2
 kept, _ = lxmf_attachments({LXMF.FIELD_AUDIO: [LXMF.AM_OPUS_OGG, b"OGGDATA"]},
                            100)
 assert kept == [("voice.ogg", b"OGGDATA")]
 kept, _ = lxmf_attachments({LXMF.FIELD_AUDIO: [LXMF.AM_CODEC2_1200, b"C2"]},
                            100)
-assert kept == [("voice.c2", b"C2")]
+assert kept == [("voice.c2", b"C2")]  # under one frame: passthrough
+
+# codec2 transcoding, both directions (optional: pycodec2 + ffmpeg)
+try:
+    import pycodec2
+except ImportError:
+    pycodec2 = None
+if pycodec2:
+    from gateway import audio_to_codec2, codec2_to_wav
+    frame = bytes(pycodec2.Codec2(1200).bytes_per_frame())
+    wav = codec2_to_wav(LXMF.AM_CODEC2_1200, frame)
+    assert wav is not None and wav[:4] == b"RIFF"
+    kept, _ = lxmf_attachments(
+        {LXMF.FIELD_AUDIO: [LXMF.AM_CODEC2_1200, frame]}, 100000)
+    assert kept[0][0] == "voice.wav"
+    if shutil.which("ffmpeg"):
+        assert audio_to_codec2(wav, 2400)
+        fields = attachment_fields([("v.m4a", "audio/mp4", wav)], 2400)
+        assert fields[LXMF.FIELD_AUDIO][0] == LXMF.AM_CODEC2_2400
+    else:
+        print("skipping encode test (no ffmpeg)")
+else:
+    print("skipping codec2 tests (no pycodec2)")
 assert lxmf_attachments(None, 5) == ([], [])
 assert lxmf_attachments({LXMF.FIELD_FILE_ATTACHMENTS:
                          [["../evil", b"x"]]}, 5)[0] == [("evil", b"x")]
