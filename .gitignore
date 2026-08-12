@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 config.toml
 live/
+docker-data/
+.env

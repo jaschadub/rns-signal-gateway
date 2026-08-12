@@ -1,0 +1,15 @@
+# User unit (no root): install to ~/.config/systemd/user/
+[Unit]
+Description=Reticulum <-> Signal gateway
+After=signal-cli.service
+Requires=signal-cli.service
+
+[Service]
+# Adjust to where you cloned the repo
+WorkingDirectory=%h/rns-signal-gateway
+ExecStart=%h/rns-signal-gateway/.venv/bin/python -u gateway.py -c config.toml
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

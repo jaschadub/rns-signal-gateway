@@ -1,0 +1,13 @@
+# User unit (no root): install to ~/.config/systemd/user/
+[Unit]
+Description=signal-cli JSON-RPC daemon
+After=network-online.target
+
+[Service]
+# %h = your home dir; adjust account number
+ExecStart=%h/.local/bin/signal-cli -a +1XXXXXXXXXX daemon --http 127.0.0.1:7583
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

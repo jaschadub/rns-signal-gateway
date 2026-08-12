@@ -209,8 +209,20 @@ an SMS/voice verification once.
 
 ## Running under systemd
 
-Adjust paths/numbers in `systemd/*.service` (signal-cli binary location,
-repo path, config path, `User=`), then:
+**User units (no root)** — recommended when everything lives under one
+user account. Adjust the account number and repo path in
+`systemd/user/*.service`, then:
+
+```sh
+cp systemd/user/*.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now signal-cli rns-signal
+loginctl enable-linger        # start at boot without a login session
+```
+
+**System units** — for a dedicated service user. Adjust paths/numbers in
+`systemd/*.service` (signal-cli binary location, repo path, config path,
+`User=`), then:
 
 ```sh
 sudo cp systemd/*.service /etc/systemd/system/
@@ -218,8 +230,41 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now signal-cli rns-signal
 ```
 
-`rns-signal.service` depends on `signal-cli.service`, so starting the
-gateway brings up both.
+In both cases `rns-signal.service` depends on `signal-cli.service`, so
+starting the gateway brings up both. Gateway logs go to the journal:
+`journalctl --user -u rns-signal -f` (drop `--user` for system units).
+
+## Running with Docker
+
+`docker-compose.yml` runs both daemons as containers: signal-cli (JVM,
+Java bundled in the image) and the gateway, joined by an internal network.
+The signal-cli port is not published to the host.
+
+```sh
+# 1. Config: bind-mounted from ./docker-data
+mkdir -p docker-data/gateway/rns docker-data/signal
+cp config.example.toml docker-data/gateway/config.toml
+# edit docker-data/gateway/config.toml:
+#   storage        = "/data/storage"
+#   rns_configdir  = "/data/rns"
+#   rpc_url        = "http://signal-cli:7583"
+#   attachment_dir = "/signal/attachments"
+# and put your Reticulum interface config in docker-data/gateway/rns/config
+
+# 2. Set the Signal account
+echo 'SIGNAL_ACCOUNT=+1XXXXXXXXXX' > .env
+
+# 3. Link the Signal account (prints the sgnl:// URI to scan)
+docker compose run --rm signal-cli link -n rns-gateway
+
+# 4. Up
+docker compose up -d
+docker compose logs -f gateway
+```
+
+Account keys persist in `docker-data/signal`, gateway identity and LXMF
+state in `docker-data/gateway/storage` — back both up, and don't commit
+`docker-data` anywhere.
 
 ## Security notes
 

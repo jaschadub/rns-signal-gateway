@@ -1,0 +1,21 @@
+services:
+  signal-cli:
+    build:
+      context: docker
+      dockerfile: signal-cli.Dockerfile
+    # SIGNAL_ACCOUNT comes from .env or the environment
+    command: ["-a", "${SIGNAL_ACCOUNT:?set SIGNAL_ACCOUNT, e.g. in .env}",
+              "daemon", "--http", "0.0.0.0:7583"]
+    volumes:
+      - ./docker-data/signal:/data
+    restart: unless-stopped
+    # no ports: published nowhere; only the gateway container can reach it
+
+  gateway:
+    build: .
+    depends_on:
+      - signal-cli
+    volumes:
+      - ./docker-data/gateway:/data
+      - ./docker-data/signal:/signal:ro
+    restart: unless-stopped
