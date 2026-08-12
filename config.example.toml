@@ -1,0 +1,25 @@
+# Copy to config.toml and edit. The gateway is deny-by-default:
+# only messages from mapped Signal groups / listed LXMF members are bridged.
+
+[gateway]
+display_name = "Signal Gateway"
+storage = "/var/lib/rns-signal"
+max_message_bytes = 4096     # drop anything larger (LoRa-friendly)
+announce_interval = 3600     # seconds between LXMF announces
+
+[signal]
+rpc_url = "http://127.0.0.1:7583"
+account = "+1XXXXXXXXXX"
+# Optional extra ACL. Omit to allow any member of a mapped group.
+# allowed_users = ["+15551234567"]
+
+# One [[channels]] block per Signal group <-> LXMF distribution list.
+# Get the group id with: signal-cli -a +1XXXXXXXXXX listGroups
+[[channels]]
+name = "backcountry"
+signal_group = "SIGNAL_GROUP_ID_BASE64"
+members = [
+    # LXMF destination hashes: these receive the fan-out from Signal
+    # and are the only sources allowed to post into the group.
+    "a91d0000000000000000000000000000",
+]

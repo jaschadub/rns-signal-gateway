@@ -1,0 +1,14 @@
+[Unit]
+Description=signal-cli JSON-RPC daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=rns-signal
+# Bind to localhost only; never expose this port externally.
+ExecStart=/usr/local/bin/signal-cli -a +1XXXXXXXXXX daemon --http 127.0.0.1:7583
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

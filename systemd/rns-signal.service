@@ -1,0 +1,13 @@
+[Unit]
+Description=Reticulum <-> Signal gateway
+After=signal-cli.service
+Requires=signal-cli.service
+
+[Service]
+User=rns-signal
+ExecStart=/usr/bin/python3 /opt/rns-signal-gateway/gateway.py -c /etc/rns-signal/config.toml
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
