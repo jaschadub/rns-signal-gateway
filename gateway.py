@@ -191,6 +191,9 @@ class Gateway:
         if not self.dedup.check(message_id(source, timestamp, text)):
             return
 
+        RNS.log(f"Bridging Signal message from {source} to "
+                f"{len(channel['members'])} LXMF member(s) on "
+                f"'{channel['name']}'", RNS.LOG_INFO)
         body = f"[Signal {name}] {text}"
         for member in channel["members"]:
             threading.Thread(target=self.send_lxmf, args=(member, body),
@@ -230,6 +233,8 @@ class Gateway:
             "groupId": channel["signal_group"],
             "message": f"[RNS {sender[:8]}]\n{text}",
         })
+        RNS.log(f"Bridged LXMF message from {sender} to Signal group on "
+                f"'{channel['name']}'", RNS.LOG_INFO)
 
     def send_lxmf(self, dest_hex, text):
         try:
