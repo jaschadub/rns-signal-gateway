@@ -65,14 +65,42 @@ echo = {"envelope": {"sourceNumber": "+1000",
                          "groupInfo": {"groupId": "G1"}}}}}
 assert parse_signal_event(echo, "+1000") is None
 
-# attachment_fields: first image inline, rest as files
-fields = attachment_fields([("a.png", "image/png", b"img1"),
-                            ("b.jpg", "image/jpeg", b"img2"),
-                            ("notes.txt", "text/plain", b"doc")])
+# attachment_fields: first image inline, rest as files, oversize dropped
+fields, notes = attachment_fields([("a.png", "image/png", b"img1"),
+                                   ("b.jpg", "image/jpeg", b"img2"),
+                                   ("notes.txt", "text/plain", b"doc"),
+                                   ("big.bin", "application/x", b"x" * 20)],
+                                  10)
 assert fields[LXMF.FIELD_IMAGE] == ["png", b"img1"]
 assert fields[LXMF.FIELD_FILE_ATTACHMENTS] == [["b.jpg", b"img2"],
                                                ["notes.txt", b"doc"]]
-assert attachment_fields([]) == {}
+assert notes == ["[dropped big.bin: 20 B over 10 B limit]"]
+assert attachment_fields([], 10) == ({}, [])
+
+# image downscaling: a big image shrinks to fit instead of dropping
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+if Image:
+    import io as _io
+    import os as _os
+    buf = _io.BytesIO()
+    Image.frombytes("RGB", (600, 600), _os.urandom(600 * 600 * 3)).save(
+        buf, "PNG")
+    big_png = buf.getvalue()
+    assert len(big_png) > 10000
+    fields, notes = attachment_fields(
+        [("photo.png", "image/png", big_png)], 1000000,
+        image_max_bytes=10000)
+    fmt, data = fields[LXMF.FIELD_IMAGE]
+    assert fmt == "webp" and len(data) <= 10000, len(data)
+    assert notes == []
+    # undecodable "image" over the cap still drops with a note
+    _, notes = attachment_fields([("x.png", "image/png", b"z" * 30)], 10)
+    assert "dropped x.png" in notes[0]
+else:
+    print("skipping image tests (no Pillow)")
 
 # lxmf_attachments: extraction and size cap
 kept, notes = lxmf_attachments({LXMF.FIELD_IMAGE: ["webp", b"12345"],
@@ -104,12 +132,38 @@ if pycodec2:
     assert kept[0][0] == "voice.wav"
     if shutil.which("ffmpeg"):
         assert audio_to_codec2(wav, 2400)
-        fields = attachment_fields([("v.m4a", "audio/mp4", wav)], 2400)
+        fields, _ = attachment_fields([("v.m4a", "audio/mp4", wav)], 100000,
+                                      voice_codec2_bitrate=2400)
         assert fields[LXMF.FIELD_AUDIO][0] == LXMF.AM_CODEC2_2400
     else:
         print("skipping encode test (no ffmpeg)")
 else:
     print("skipping codec2 tests (no pycodec2)")
+
+# dynamic membership + /commands
+cfg2 = {"channels": [{"name": "camp", "signal_group": "G2",
+                      "members": ["aa11"], "open": True},
+                     {"name": "ops", "signal_group": "G3",
+                      "members": ["aa11"]}]}
+dyn = {}
+from gateway import command_reply
+
+assert command_reply(cfg2, dyn, "bb22", "/join camp") == ("Joined camp", True)
+assert dyn == {"camp": ["bb22"]}
+assert channel_for_member(cfg2, "bb22", dyn)["name"] == "camp"
+assert channel_for_member(cfg2, "bb22") is None          # config-only view
+assert command_reply(cfg2, dyn, "bb22", "/join camp") == \
+    ("Already a member of camp", False)
+assert command_reply(cfg2, dyn, "bb22", "/join ops") == \
+    ("Channel ops is closed; ask the operator", False)
+assert command_reply(cfg2, dyn, "bb22", "/join nope") == \
+    ("No such channel: nope", False)
+assert command_reply(cfg2, dyn, "bb22", "/channels") == \
+    ("camp (member)\nops (closed)", False)
+assert command_reply(cfg2, dyn, "bb22", "/leave camp") == ("Left camp", True)
+assert dyn == {"camp": []}
+assert command_reply(cfg2, dyn, "aa11", "/leave ops")[1] is False  # static
+assert command_reply(cfg2, dyn, "bb22", "/help")[0].startswith("Commands:")
 assert lxmf_attachments(None, 5) == ([], [])
 assert lxmf_attachments({LXMF.FIELD_FILE_ATTACHMENTS:
                          [["../evil", b"x"]]}, 5)[0] == [("evil", b"x")]

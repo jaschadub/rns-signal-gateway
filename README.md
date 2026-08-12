@@ -27,8 +27,9 @@ Signal group  <->  signal-cli  <->  gateway  <->  LXMF  <->  Reticulum users
 - Images and file attachments bridge both ways (up to
   `max_attachment_bytes`, default 1 MB). Signal images arrive in Sideband
   as inline images (LXMF `FIELD_IMAGE`); other files use LXMF file
-  attachments. Oversize attachments are dropped with a note in the bridged
-  text, so radio-bound channels can set a small cap without losing the
+  attachments. Oversize images are downscaled to fit (see Image budgets);
+  other oversize attachments are dropped with a note in the bridged text,
+  so radio-bound channels can set a small cap without losing the
   conversation.
 - Voice memos bridge both ways. Reticulum → Signal: Opus voice arrives as
   a playable `.ogg`; codec2 voice is decoded to a playable `.wav` when
@@ -194,6 +195,28 @@ oversize, bad signature) at Verbose/Warning.
   channel receives `[Signal <name>] text`. On a linked personal account
   your own posts bridge too (via sync messages).
 
+### LXMF commands
+
+Any LXMF user can message the gateway directly with:
+
+```text
+/channels          list channels and your membership
+/join <channel>    join a channel marked `open = true` in the config
+/leave <channel>   leave a channel you joined
+```
+
+Self-service joins only work on channels the operator marked `open`;
+everything else stays deny-by-default. Joined members persist in
+`storage/members.json` and behave exactly like configured members.
+
+### Image budgets
+
+With Pillow installed, images that don't fit are downscaled/recompressed
+to WebP instead of dropped. Set `image_max_bytes` globally or per channel
+to force all bridged images under a budget — e.g. 32 kB for a channel
+whose members sit behind LoRa. Without Pillow, oversize images are
+dropped with a note, as before.
+
 First-message notes:
 
 - The gateway must have seen a member's LXMF **announce** to validate
@@ -320,9 +343,6 @@ python3 test_integration.py    # full bridge against a mock signal-cli
 
 ## Later
 
-Image downscaling/recompression for radio-bound channels (attachments are
-currently passed through as-is under the size cap), reactions, delivery
-receipts, `/join`-style self-service membership over LXMF, per-user 1:1
-mapping, and a Signal command console (`/rns-status`, `/rns-send ...`).
-Codec2 450PWB voice currently decodes at 8 kHz (plays slow); special-case
-it if anyone uses it.
+Reactions, delivery receipts, per-user 1:1 mapping, and a Signal command
+console (`/rns-status`, `/rns-send ...`). Codec2 450PWB voice currently
+decodes at 8 kHz (plays slow); special-case it if anyone uses it.
