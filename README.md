@@ -1,8 +1,10 @@
 # rns-signal-gateway
 
-Bidirectional text bridge between [Reticulum](https://reticulum.network)
+Bidirectional bridge between [Reticulum](https://reticulum.network)
 (LXMF) and [Signal](https://signal.org) via
-[signal-cli](https://github.com/AsamK/signal-cli)'s JSON-RPC/SSE HTTP API.
+[signal-cli](https://github.com/AsamK/signal-cli)'s JSON-RPC/SSE HTTP API —
+text, images, files, and voice memos (including codec2 transcoding for
+low-bandwidth radio links).
 
 **Status**: text and image/file bridging verified end-to-end in both
 directions (2026-08-12) on a live deployment — Sideband over a Reticulum
