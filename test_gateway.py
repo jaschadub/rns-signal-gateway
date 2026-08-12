@@ -33,6 +33,21 @@ dm = {"envelope": {"sourceNumber": "+1555",
                    "dataMessage": {"message": "psst"}}}
 assert parse_signal_event(dm, "+1000") == ("+1555", "+1555", None, "psst", None)
 
+# syncMessage: own-device posts bridge (linked personal account)...
+sync = {"envelope": {"sourceNumber": "+1000", "sourceName": "Me",
+                     "timestamp": 43,
+                     "syncMessage": {"sentMessage": {
+                         "message": "from my phone",
+                         "groupInfo": {"groupId": "G1"}}}}}
+assert parse_signal_event(sync, "+1000") == ("+1000", "Me", "G1",
+                                             "from my phone", 43)
+# ...but the gateway's own bridged posts never loop back
+echo = {"envelope": {"sourceNumber": "+1000",
+                     "syncMessage": {"sentMessage": {
+                         "message": "[RNS aabbccdd]\nhi",
+                         "groupInfo": {"groupId": "G1"}}}}}
+assert parse_signal_event(echo, "+1000") is None
+
 # channel routing (deny by default)
 cfg = {"channels": [{"name": "c1", "signal_group": "G1",
                      "members": ["aa11", "bb22"]}]}

@@ -51,18 +51,25 @@ class Dedup:
 def parse_signal_event(event, own_account):
     """Extract (source, name, group_id, text, timestamp) from an SSE event.
 
-    Returns None for anything that should not be bridged: non-text events,
-    messages from the gateway's own account, sync messages.
+    Handles dataMessage (posts from others) and syncMessage.sentMessage
+    (posts from the gateway account's own other devices, e.g. when the
+    gateway is linked to a personal Signal account). Returns None for
+    anything that should not be bridged.
     """
     envelope = event.get("envelope") or {}
-    data = envelope.get("dataMessage") or {}
+    data = envelope.get("dataMessage")
+    sync = data is None
+    if sync:
+        data = (envelope.get("syncMessage") or {}).get("sentMessage") or {}
     text = data.get("message")
     if not text:
         return None
+    if sync and text.startswith("[RNS "):
+        return None  # loop guard: the gateway's own bridged posts
     source = (envelope.get("sourceNumber")
               or envelope.get("sourceUuid")
               or envelope.get("source"))
-    if source is None or source == own_account:
+    if source is None or (not sync and source == own_account):
         return None
     group_id = (data.get("groupInfo") or {}).get("groupId")
     name = envelope.get("sourceName") or source
@@ -104,7 +111,8 @@ class Gateway:
 
         storage = cfg["gateway"]["storage"]
         os.makedirs(storage, exist_ok=True)
-        self.reticulum = RNS.Reticulum()
+        # optional isolated RNS config dir; None = default ~/.reticulum
+        self.reticulum = RNS.Reticulum(cfg["gateway"].get("rns_configdir"))
 
         identity_path = os.path.join(storage, "identity")
         if os.path.isfile(identity_path):
@@ -197,13 +205,16 @@ class Gateway:
             RNS.log(f"LXMF handler error: {e}", RNS.LOG_ERROR)
 
     def handle_lxmf(self, message):
-        if not message.signature_validated:
-            return
         sender = message.source_hash.hex()
         channel = channel_for_member(self.cfg, sender)
         if channel is None:  # deny by default
             RNS.log(f"Dropping LXMF message from non-member {sender}",
                     RNS.LOG_VERBOSE)
+            return
+        if not message.signature_validated:
+            RNS.log(f"Dropping LXMF message from member {sender} without "
+                    f"validated signature (no announce seen yet?)",
+                    RNS.LOG_WARNING)
             return
         if len(message.content) > self.max_bytes:
             RNS.log(f"Dropping oversize LXMF message ({len(message.content)} "
