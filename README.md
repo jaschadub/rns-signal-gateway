@@ -31,15 +31,24 @@ Signal group  <->  signal-cli  <->  gateway  <->  LXMF  <->  Reticulum users
 
 - Python 3.11+ (uses stdlib `tomllib`)
 - `pip install -r requirements.txt` (installs `lxmf`, which pulls in `rns`)
-- signal-cli 0.14+ — **note**: recent JVM builds require a newer Java than
-  most distros ship (0.14.7 wants Java 25). The GraalVM **native** build
-  needs no Java at all and is the easy path:
+- signal-cli 0.14+ — use the **JVM build**. The GraalVM native build works
+  for text but **cannot send attachments** (it fails with
+  `Can't load library: awt` because AWT isn't bundled). The JVM build
+  needs the Java version it was compiled for (0.14.7 wants Java 25); a
+  Temurin JRE tarball avoids touching system Java:
 
   ```sh
   mkdir -p ~/.local/opt ~/.local/bin && cd ~/.local/opt
-  curl -sLO https://github.com/AsamK/signal-cli/releases/download/v0.14.7/signal-cli-0.14.7-Linux-native.tar.gz
-  mkdir -p signal-cli-native && tar xzf signal-cli-0.14.7-Linux-native.tar.gz -C signal-cli-native
-  ln -sf ~/.local/opt/signal-cli-native/signal-cli ~/.local/bin/signal-cli
+  curl -sL -o jre.tar.gz "https://api.adoptium.net/v3/binary/latest/25/ga/linux/x64/jre/hotspot/normal/eclipse"
+  tar xzf jre.tar.gz && rm jre.tar.gz            # extracts jdk-25.x.y+z-jre
+  curl -sLO https://github.com/AsamK/signal-cli/releases/download/v0.14.7/signal-cli-0.14.7.tar.gz
+  tar xzf signal-cli-0.14.7.tar.gz && rm signal-cli-0.14.7.tar.gz
+  cat > ~/.local/bin/signal-cli <<'EOF'
+  #!/bin/sh
+  export JAVA_HOME="$HOME/.local/opt/jdk-25.0.4+7-jre"   # adjust to extracted dir
+  exec "$HOME/.local/opt/signal-cli-0.14.7/bin/signal-cli" "$@"
+  EOF
+  chmod +x ~/.local/bin/signal-cli
   signal-cli --version
   ```
 
@@ -232,7 +241,10 @@ python3 test_integration.py    # full bridge against a mock signal-cli
 ## Troubleshooting
 
 - **JVM signal-cli fails with `UnsupportedClassVersionError`** — your Java
-  is too old for that build; use the native build (see Requirements).
+  is too old for that build; install the matching JRE (see Requirements).
+- **Sending attachments fails with `Can't load library: awt`** — you're
+  running the GraalVM native build; switch to the JVM build (see
+  Requirements). Receiving attachments works on both.
 - **Nothing bridges, no logs** — check the daemon is on `rpc_url`
   (`curl http://127.0.0.1:7583/api/v1/check`) and the group id matches
   `listGroups` exactly (base64, including trailing `=`).
