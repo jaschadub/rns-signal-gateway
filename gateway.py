@@ -10,6 +10,8 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
+import tempfile
 import threading
 import time
 import urllib.request
@@ -61,8 +63,9 @@ def parse_signal_event(event, own_account):
     sync = data is None
     if sync:
         data = (envelope.get("syncMessage") or {}).get("sentMessage") or {}
-    text = data.get("message")
-    if not text:
+    text = data.get("message") or ""
+    attachments = data.get("attachments") or []
+    if not text and not attachments:
         return None
     if sync and text.startswith("[RNS "):
         return None  # loop guard: the gateway's own bridged posts
@@ -73,7 +76,55 @@ def parse_signal_event(event, own_account):
         return None
     group_id = (data.get("groupInfo") or {}).get("groupId")
     name = envelope.get("sourceName") or source
-    return (source, name, group_id, text, envelope.get("timestamp"))
+    return (source, name, group_id, text, envelope.get("timestamp"),
+            attachments)
+
+
+def attachment_fields(loaded):
+    """Build LXMF fields from [(filename, content_type, bytes), ...].
+
+    The first image becomes FIELD_IMAGE (rendered inline by Sideband);
+    everything else becomes FIELD_FILE_ATTACHMENTS.
+    """
+    fields = {}
+    files = []
+    for name, ctype, data in loaded:
+        ext = os.path.splitext(name)[1].lstrip(".").lower()
+        if ctype.startswith("image/") and LXMF.FIELD_IMAGE not in fields:
+            fields[LXMF.FIELD_IMAGE] = [ext or ctype.split("/", 1)[1], data]
+        else:
+            files.append([os.path.basename(name), data])
+    if files:
+        fields[LXMF.FIELD_FILE_ATTACHMENTS] = files
+    return fields
+
+
+def lxmf_attachments(message_fields, max_bytes):
+    """Extract [(filename, bytes), ...] plus drop notes from LXMF fields."""
+    out, notes = [], []
+    fields = message_fields or {}
+    image = fields.get(LXMF.FIELD_IMAGE)
+    if isinstance(image, (list, tuple)) and len(image) >= 2 and image[1]:
+        out.append((f"image.{image[0]}", image[1]))
+    for att in fields.get(LXMF.FIELD_FILE_ATTACHMENTS) or []:
+        if isinstance(att, (list, tuple)) and len(att) >= 2 and att[1]:
+            out.append((str(att[0]) or "file", att[1]))
+    kept = []
+    for name, data in out:
+        if len(data) > max_bytes:
+            notes.append(f"[dropped {os.path.basename(name)}: "
+                         f"{len(data)} B over {max_bytes} B limit]")
+        else:
+            kept.append((os.path.basename(name), data))
+    return kept, notes
+
+
+def attachment_sig(items):
+    """Stable digest input for dedup: names and sizes of attachments.
+
+    Accepts (name, ..., data) tuples — name first, data last.
+    """
+    return "".join(f"|{i[0]}:{len(i[-1])}" for i in items)
 
 
 def load_config(path):
@@ -108,6 +159,10 @@ class Gateway:
         self.rpc_url = cfg["signal"]["rpc_url"].rstrip("/")
         self.account = cfg["signal"]["account"]
         self.max_bytes = cfg["gateway"].get("max_message_bytes", 4096)
+        self.max_attachment_bytes = cfg["gateway"].get(
+            "max_attachment_bytes", 1_000_000)
+        self.attachment_dir = os.path.expanduser(cfg["signal"].get(
+            "attachment_dir", "~/.local/share/signal-cli/attachments"))
 
         storage = cfg["gateway"]["storage"]
         os.makedirs(storage, exist_ok=True)
@@ -170,11 +225,30 @@ class Gateway:
                         RNS.LOG_WARNING)
                 time.sleep(5)
 
+    def load_signal_attachments(self, attachments):
+        """Read attachment files signal-cli stored; returns (loaded, notes)."""
+        loaded, notes = [], []
+        for att in attachments:
+            aid = att.get("id")
+            name = att.get("filename") or aid or "file"
+            path = os.path.join(self.attachment_dir, aid) if aid else None
+            if not path or not os.path.isfile(path):
+                notes.append(f"[attachment {name} unavailable]")
+                continue
+            size = os.path.getsize(path)
+            if size > self.max_attachment_bytes:
+                notes.append(f"[dropped {name}: {size} B over "
+                             f"{self.max_attachment_bytes} B limit]")
+                continue
+            with open(path, "rb") as f:
+                loaded.append((name, att.get("contentType") or "", f.read()))
+        return loaded, notes
+
     def on_signal(self, event):
         parsed = parse_signal_event(event, self.account)
         if parsed is None:
             return
-        source, name, group_id, text, timestamp = parsed
+        source, name, group_id, text, timestamp, attachments = parsed
 
         allowed = self.cfg["signal"].get("allowed_users")
         if allowed and source not in allowed:
@@ -188,15 +262,21 @@ class Gateway:
             RNS.log(f"Dropping oversize Signal message ({len(text)} chars) "
                     f"from {source}", RNS.LOG_WARNING)
             return
-        if not self.dedup.check(message_id(source, timestamp, text)):
+        loaded, notes = self.load_signal_attachments(attachments)
+        if not self.dedup.check(message_id(
+                source, timestamp, text + attachment_sig(loaded))):
             return
 
-        RNS.log(f"Bridging Signal message from {source} to "
+        RNS.log(f"Bridging Signal message from {source} "
+                f"({len(loaded)} attachment(s)) to "
                 f"{len(channel['members'])} LXMF member(s) on "
                 f"'{channel['name']}'", RNS.LOG_INFO)
-        body = f"[Signal {name}] {text}"
+        body = "\n".join(p for p in [f"[Signal {name}] {text}".rstrip(),
+                                     *notes] if p)
+        fields = attachment_fields(loaded)
         for member in channel["members"]:
-            threading.Thread(target=self.send_lxmf, args=(member, body),
+            threading.Thread(target=self.send_lxmf,
+                             args=(member, body, fields),
                              daemon=True).start()
 
     # ----- Reticulum side -----
@@ -224,19 +304,41 @@ class Gateway:
                     f"bytes) from {sender}", RNS.LOG_WARNING)
             return
         text = message.content.decode("utf-8", "replace").strip()
-        if not text:
+        attachments, notes = lxmf_attachments(message.fields,
+                                              self.max_attachment_bytes)
+        if not text and not attachments and not notes:
             return
-        if not self.dedup.check(message_id(sender, message.timestamp, text)):
+        if not self.dedup.check(message_id(
+                sender, message.timestamp, text + attachment_sig(attachments))):
             return
-        self.signal_rpc("send", {
+        params = {
             "account": self.account,
             "groupId": channel["signal_group"],
-            "message": f"[RNS {sender[:8]}]\n{text}",
-        })
-        RNS.log(f"Bridged LXMF message from {sender} to Signal group on "
+            "message": "\n".join(p for p in [f"[RNS {sender[:8]}]", text,
+                                             *notes] if p),
+        }
+        tmpdir = None
+        try:
+            if attachments:
+                tmpdir = tempfile.mkdtemp(prefix="rns-signal-att-")
+                paths = []
+                # ponytail: same-basename attachments overwrite; prefix an
+                # index if that ever matters
+                for name, data in attachments:
+                    path = os.path.join(tmpdir, os.path.basename(name))
+                    with open(path, "wb") as f:
+                        f.write(data)
+                    paths.append(path)
+                params["attachments"] = paths
+            self.signal_rpc("send", params)
+        finally:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+        RNS.log(f"Bridged LXMF message from {sender} "
+                f"({len(attachments)} attachment(s)) to Signal group on "
                 f"'{channel['name']}'", RNS.LOG_INFO)
 
-    def send_lxmf(self, dest_hex, text):
+    def send_lxmf(self, dest_hex, text, fields=None):
         try:
             dest_hash = bytes.fromhex(dest_hex)
             if not RNS.Transport.has_path(dest_hash):
@@ -254,6 +356,7 @@ class Gateway:
                 identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
                 "lxmf", "delivery")
             lxm = LXMF.LXMessage(destination, self.dest, text,
+                                 fields=fields or None,
                                  desired_method=LXMF.LXMessage.DIRECT)
             self.router.handle_outbound(lxm)
         except Exception as e:  # noqa: BLE001 - daemon must survive bad messages

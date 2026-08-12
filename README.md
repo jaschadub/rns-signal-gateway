@@ -20,6 +20,12 @@ Signal group  <->  signal-cli  <->  gateway  <->  LXMF  <->  Reticulum users
   messages are dropped to protect low-bandwidth (LoRa) routes.
 - Works linked to a personal Signal account: posts from your own phone
   arrive as sync messages and are bridged too.
+- Images and file attachments bridge both ways (up to
+  `max_attachment_bytes`, default 1 MB). Signal images arrive in Sideband
+  as inline images (LXMF `FIELD_IMAGE`); other files use LXMF file
+  attachments. Oversize attachments are dropped with a note in the bridged
+  text, so radio-bound channels can set a small cap without losing the
+  conversation.
 
 ## Requirements
 
@@ -240,6 +246,7 @@ python3 test_integration.py    # full bridge against a mock signal-cli
 
 ## Later
 
-Signal attachments, LXMF file transfer, reactions, delivery receipts,
-`/join`-style self-service membership over LXMF, per-user 1:1 mapping, and
-a Signal command console (`/rns-status`, `/rns-send ...`).
+Image downscaling/recompression for radio-bound channels (attachments are
+currently passed through as-is under the size cap), reactions, delivery
+receipts, `/join`-style self-service membership over LXMF, per-user 1:1
+mapping, and a Signal command console (`/rns-status`, `/rns-send ...`).
