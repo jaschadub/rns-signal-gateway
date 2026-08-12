@@ -305,6 +305,10 @@ python3 test_integration.py    # full bridge against a mock signal-cli
 - **Your own Signal posts don't bridge** — only on linked accounts, and
   only group posts; DMs are never bridged.
 
+## License
+
+[MIT](LICENSE)
+
 ## Later
 
 Image downscaling/recompression for radio-bound channels (attachments are
