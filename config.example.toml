@@ -4,12 +4,15 @@
 [gateway]
 display_name = "Signal Gateway"
 storage = "/var/lib/rns-signal"
-max_message_bytes = 4096     # drop anything larger (LoRa-friendly)
+max_message_bytes = 4096     # drop larger text (LoRa-friendly)
+max_attachment_bytes = 1000000  # drop larger attachments, keep the text
 announce_interval = 3600     # seconds between LXMF announces
 
 [signal]
 rpc_url = "http://127.0.0.1:7583"
 account = "+1XXXXXXXXXX"
+# Where the signal-cli daemon stores received attachments:
+# attachment_dir = "~/.local/share/signal-cli/attachments"
 # Optional extra ACL. Omit to allow any member of a mapped group.
 # allowed_users = ["+15551234567"]
 

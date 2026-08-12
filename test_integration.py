@@ -75,6 +75,9 @@ def run_client(workdir):
     def on_recv(message):
         print("LXMF-RECV: " + message.content.decode("utf-8", "replace"),
               flush=True)
+        image = (message.fields or {}).get(LXMF.FIELD_IMAGE)
+        if image:
+            print(f"LXMF-IMAGE: {image[0]} {len(image[1])}", flush=True)
 
     router.register_delivery_callback(on_recv)
     print("CLIENT-HASH: " + dest.hash.hex(), flush=True)
@@ -102,9 +105,23 @@ def run_client(workdir):
                          desired_method=LXMF.LXMessage.DIRECT)
     router.handle_outbound(lxm)
     print("CLIENT-SENT", flush=True)
+
+    def announcer():
+        while True:
+            router.announce(dest.hash)
+            time.sleep(5)
+    threading.Thread(target=announcer, daemon=True).start()
+
+    for line in sys.stdin:
+        if line.strip() == "send-image":
+            lxm = LXMF.LXMessage(
+                gw_dest, dest, "check out this photo",
+                fields={LXMF.FIELD_IMAGE: ["png", b"IMGBYTES"]},
+                desired_method=LXMF.LXMessage.DIRECT)
+            router.handle_outbound(lxm)
+            print("CLIENT-SENT-IMAGE", flush=True)
     while True:
-        router.announce(dest.hash)
-        time.sleep(5)
+        time.sleep(1)
 
 
 # ---------- mock signal-cli ----------
@@ -117,6 +134,11 @@ class MockSignalHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n))
+        # snapshot attachment files now: the gateway deletes them after send
+        req["_attachment_data"] = []
+        for p in req.get("params", {}).get("attachments", []):
+            with open(p, "rb") as f:
+                req["_attachment_data"].append(f.read())
         rpc_calls.append(req)
         body = json.dumps({"jsonrpc": "2.0", "id": req.get("id"),
                            "result": {"timestamp": 1}}).encode()
@@ -211,6 +233,7 @@ announce_interval = 5
 [signal]
 rpc_url = "http://127.0.0.1:{SIGNAL_PORT}"
 account = "{ACCOUNT}"
+attachment_dir = "{workdir}/attachments"
 
 [[channels]]
 name = "test"
@@ -252,6 +275,35 @@ members = ["{client_hash}"]
         received = grep(client_lines, r"LXMF-RECV: (.*)").group(1)
         assert received == "[Signal Alice] hello from signal", received
         print("  ok: LXMF user received", json.dumps(received))
+
+        print("* LXMF image -> Signal")
+        client.stdin.write("send-image\n")
+        client.stdin.flush()
+        wait_for(lambda: any("attachments" in c.get("params", {})
+                             for c in rpc_calls),
+                 60, "gateway RPC send with attachment")
+        call = next(c for c in rpc_calls if "attachments" in c["params"])
+        assert call["_attachment_data"] == [b"IMGBYTES"], call
+        assert "check out this photo" in call["params"]["message"], call
+        print("  ok: Signal received attachment",
+              [os.path.basename(p) for p in call["params"]["attachments"]])
+
+        print("* Signal image -> LXMF")
+        att_dir = os.path.join(workdir, "attachments")
+        os.makedirs(att_dir, exist_ok=True)
+        with open(os.path.join(att_dir, "test.png"), "wb") as f:
+            f.write(b"PNGDATA")
+        sse_queue.put({"envelope": {
+            "sourceNumber": "+15551234567", "sourceName": "Alice",
+            "timestamp": 1723500001000,
+            "dataMessage": {"message": "photo incoming",
+                            "attachments": [{"id": "test.png",
+                                             "filename": "photo.png",
+                                             "contentType": "image/png"}],
+                            "groupInfo": {"groupId": GROUP_ID}}}})
+        wait_for(lambda: grep(client_lines, r"LXMF-IMAGE: png 7"),
+                 60, "LXMF image delivery to client")
+        print("  ok: LXMF user received inline image field (png, 7 bytes)")
 
         print("\nINTEGRATION TEST PASSED")
     finally:

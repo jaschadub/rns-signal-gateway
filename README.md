@@ -4,6 +4,10 @@ Bidirectional text bridge between [Reticulum](https://reticulum.network)
 (LXMF) and [Signal](https://signal.org) via
 [signal-cli](https://github.com/AsamK/signal-cli)'s JSON-RPC/SSE HTTP API.
 
+**Status**: text and image/file bridging verified end-to-end in both
+directions (2026-08-12) on a live deployment — Sideband over a Reticulum
+TCP backbone on one side, a linked personal Signal account on the other.
+
 Maps Signal groups to lists of LXMF destinations ("channels"):
 
 ```text
@@ -20,20 +24,35 @@ Signal group  <->  signal-cli  <->  gateway  <->  LXMF  <->  Reticulum users
   messages are dropped to protect low-bandwidth (LoRa) routes.
 - Works linked to a personal Signal account: posts from your own phone
   arrive as sync messages and are bridged too.
+- Images and file attachments bridge both ways (up to
+  `max_attachment_bytes`, default 1 MB). Signal images arrive in Sideband
+  as inline images (LXMF `FIELD_IMAGE`); other files use LXMF file
+  attachments. Oversize attachments are dropped with a note in the bridged
+  text, so radio-bound channels can set a small cap without losing the
+  conversation.
 
 ## Requirements
 
 - Python 3.11+ (uses stdlib `tomllib`)
 - `pip install -r requirements.txt` (installs `lxmf`, which pulls in `rns`)
-- signal-cli 0.14+ — **note**: recent JVM builds require a newer Java than
-  most distros ship (0.14.7 wants Java 25). The GraalVM **native** build
-  needs no Java at all and is the easy path:
+- signal-cli 0.14+ — use the **JVM build**. The GraalVM native build works
+  for text but **cannot send attachments** (it fails with
+  `Can't load library: awt` because AWT isn't bundled). The JVM build
+  needs the Java version it was compiled for (0.14.7 wants Java 25); a
+  Temurin JRE tarball avoids touching system Java:
 
   ```sh
   mkdir -p ~/.local/opt ~/.local/bin && cd ~/.local/opt
-  curl -sLO https://github.com/AsamK/signal-cli/releases/download/v0.14.7/signal-cli-0.14.7-Linux-native.tar.gz
-  mkdir -p signal-cli-native && tar xzf signal-cli-0.14.7-Linux-native.tar.gz -C signal-cli-native
-  ln -sf ~/.local/opt/signal-cli-native/signal-cli ~/.local/bin/signal-cli
+  curl -sL -o jre.tar.gz "https://api.adoptium.net/v3/binary/latest/25/ga/linux/x64/jre/hotspot/normal/eclipse"
+  tar xzf jre.tar.gz && rm jre.tar.gz            # extracts jdk-25.x.y+z-jre
+  curl -sLO https://github.com/AsamK/signal-cli/releases/download/v0.14.7/signal-cli-0.14.7.tar.gz
+  tar xzf signal-cli-0.14.7.tar.gz && rm signal-cli-0.14.7.tar.gz
+  cat > ~/.local/bin/signal-cli <<'EOF'
+  #!/bin/sh
+  export JAVA_HOME="$HOME/.local/opt/jdk-25.0.4+7-jre"   # adjust to extracted dir
+  exec "$HOME/.local/opt/signal-cli-0.14.7/bin/signal-cli" "$@"
+  EOF
+  chmod +x ~/.local/bin/signal-cli
   signal-cli --version
   ```
 
@@ -226,7 +245,10 @@ python3 test_integration.py    # full bridge against a mock signal-cli
 ## Troubleshooting
 
 - **JVM signal-cli fails with `UnsupportedClassVersionError`** — your Java
-  is too old for that build; use the native build (see Requirements).
+  is too old for that build; install the matching JRE (see Requirements).
+- **Sending attachments fails with `Can't load library: awt`** — you're
+  running the GraalVM native build; switch to the JVM build (see
+  Requirements). Receiving attachments works on both.
 - **Nothing bridges, no logs** — check the daemon is on `rpc_url`
   (`curl http://127.0.0.1:7583/api/v1/check`) and the group id matches
   `listGroups` exactly (base64, including trailing `=`).
@@ -240,6 +262,7 @@ python3 test_integration.py    # full bridge against a mock signal-cli
 
 ## Later
 
-Signal attachments, LXMF file transfer, reactions, delivery receipts,
-`/join`-style self-service membership over LXMF, per-user 1:1 mapping, and
-a Signal command console (`/rns-status`, `/rns-send ...`).
+Image downscaling/recompression for radio-bound channels (attachments are
+currently passed through as-is under the size cap), reactions, delivery
+receipts, `/join`-style self-service membership over LXMF, per-user 1:1
+mapping, and a Signal command console (`/rns-status`, `/rns-send ...`).
