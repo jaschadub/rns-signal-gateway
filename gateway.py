@@ -524,8 +524,12 @@ class Gateway:
             return
         if not message.signature_validated:
             RNS.log(f"Dropping LXMF message from {sender} without "
-                    f"validated signature (no announce seen yet?)",
+                    f"validated signature (no announce seen yet?); "
+                    f"requesting path so the next attempt validates",
                     RNS.LOG_WARNING)
+            # path responses carry the sender's announce, teaching us
+            # their identity for the next delivery
+            RNS.Transport.request_path(message.source_hash)
             return
         if text.startswith("/"):
             reply, changed = command_reply(self.cfg, self.dynamic_members,
