@@ -372,12 +372,16 @@ class Gateway:
             identity = RNS.Identity()
             identity.to_file(identity_path)
 
+        delivery_limit_kb = cfg["gateway"].get("lxmf_delivery_limit_kb", 8192)
+        # toward Signal, anything the LXMF router accepted is fine — the
+        # tight max_attachment_bytes cap protects the Reticulum side only
+        self.signal_bound_max_bytes = delivery_limit_kb * 1000
         self.router = LXMF.LXMRouter(
             storagepath=os.path.join(storage, "lxmf"),
             # per-transfer acceptance limit (KB); transfers above this are
             # rejected before the gateway sees them, so keep it above the
             # largest attachment you want to be able to downscale/bridge
-            delivery_limit=cfg["gateway"].get("lxmf_delivery_limit_kb", 8192))
+            delivery_limit=delivery_limit_kb)
         self.dest = self.router.register_delivery_identity(
             identity,
             display_name=cfg["gateway"].get("display_name", "Signal Gateway"),
@@ -545,7 +549,7 @@ class Gateway:
                     f"bytes) from {sender}", RNS.LOG_WARNING)
             return
         attachments, notes = lxmf_attachments(message.fields,
-                                              self.max_attachment_bytes)
+                                              self.signal_bound_max_bytes)
         if not text and not attachments and not notes:
             return
         if not self.dedup.check(message_id(
