@@ -16,6 +16,10 @@ announce_interval = 3600     # seconds between LXMF announces
 # bridging (needs Pillow). Omit to only shrink images that exceed
 # max_attachment_bytes. Can be overridden per channel.
 # image_max_bytes = 262144
+# LXMF per-transfer acceptance limit in KB (default 8192). Transfers
+# above this are rejected at the LXMF layer before the gateway can
+# downscale them; raise for big images, lower for radio-bound gateways.
+# lxmf_delivery_limit_kb = 8192
 
 [signal]
 rpc_url = "http://127.0.0.1:7583"

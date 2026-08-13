@@ -99,6 +99,11 @@ if Image:
     # undecodable "image" over the cap still drops with a note
     _, notes = attachment_fields([("x.png", "image/png", b"z" * 30)], 10)
     assert "dropped x.png" in notes[0]
+    # oversize LXMF image toward Signal shrinks instead of dropping
+    kept, notes = lxmf_attachments({LXMF.FIELD_IMAGE: ["png", big_png]},
+                                   10000)
+    assert notes == [] and kept[0][0] == "image.webp"
+    assert len(kept[0][1]) <= 10000
 else:
     print("skipping image tests (no Pillow)")
 

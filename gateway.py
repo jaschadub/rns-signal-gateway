@@ -159,7 +159,12 @@ def lxmf_attachments(message_fields, max_bytes):
     fields = message_fields or {}
     image = fields.get(LXMF.FIELD_IMAGE)
     if isinstance(image, (list, tuple)) and len(image) >= 2 and image[1]:
-        out.append((f"image.{image[0]}", image[1]))
+        name, data = f"image.{image[0]}", image[1]
+        if len(data) > max_bytes:
+            shrunk = shrink_image(data, max_bytes)
+            if shrunk is not None:
+                name, data = "image.webp", shrunk
+        out.append((name, data))
     audio = fields.get(LXMF.FIELD_AUDIO)
     if isinstance(audio, (list, tuple)) and len(audio) >= 2 and audio[1]:
         if audio[0] >= LXMF.AM_OPUS_OGG:
@@ -367,7 +372,12 @@ class Gateway:
             identity = RNS.Identity()
             identity.to_file(identity_path)
 
-        self.router = LXMF.LXMRouter(storagepath=os.path.join(storage, "lxmf"))
+        self.router = LXMF.LXMRouter(
+            storagepath=os.path.join(storage, "lxmf"),
+            # per-transfer acceptance limit (KB); transfers above this are
+            # rejected before the gateway sees them, so keep it above the
+            # largest attachment you want to be able to downscale/bridge
+            delivery_limit=cfg["gateway"].get("lxmf_delivery_limit_kb", 8192))
         self.dest = self.router.register_delivery_identity(
             identity,
             display_name=cfg["gateway"].get("display_name", "Signal Gateway"),
