@@ -1,5 +1,8 @@
+# `docker compose pull` uses the prebuilt ghcr.io images (amd64/arm64);
+# plain `docker compose up` builds locally from this repo instead.
 services:
   signal-cli:
+    image: ghcr.io/jaschadub/rns-signal-cli:latest
     build:
       context: docker
       dockerfile: signal-cli.Dockerfile
@@ -12,6 +15,7 @@ services:
     # no ports: published nowhere; only the gateway container can reach it
 
   gateway:
+    image: ghcr.io/jaschadub/rns-signal-gateway:latest
     build: .
     depends_on:
       - signal-cli

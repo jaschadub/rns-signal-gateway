@@ -274,6 +274,10 @@ starting the gateway brings up both. Gateway logs go to the journal:
 Java bundled in the image) and the gateway, joined by an internal network.
 The signal-cli port is not published to the host.
 
+Prebuilt multi-arch images (amd64/arm64 — Raspberry Pi works) are
+published to GHCR on every push to main: `docker compose pull` fetches
+them; plain `docker compose up` builds locally from the repo instead.
+
 ```sh
 # 1. Config: bind-mounted from ./docker-data
 mkdir -p docker-data/gateway/rns docker-data/signal
