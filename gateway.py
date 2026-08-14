@@ -582,9 +582,16 @@ class Gateway:
         finally:
             if tmpdir:
                 shutil.rmtree(tmpdir, ignore_errors=True)
+        # distribution-group semantics: other LXMF members get the post
+        # too, with original fields passed through natively
+        peers = [m for m in self.channel_members(channel) if m != sender]
+        for member in peers:
+            self.pool.submit(self.send_lxmf, member, params["message"],
+                             message.fields or None)
         RNS.log(f"Bridged LXMF message from {sender} "
-                f"({len(attachments)} attachment(s)) to Signal group on "
-                f"'{channel['name']}'", RNS.LOG_INFO)
+                f"({len(attachments)} attachment(s)) to Signal group and "
+                f"{len(peers)} LXMF member(s) on '{channel['name']}'",
+                RNS.LOG_INFO)
 
     def send_lxmf(self, dest_hex, text, fields=None):
         try:

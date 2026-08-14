@@ -19,7 +19,9 @@ Signal group  <->  signal-cli  <->  gateway  <->  LXMF  <->  Reticulum users
 - Signal group messages fan out to the channel's LXMF members as
   `[Signal Alice] text`.
 - LXMF messages from members post into the Signal group as
-  `[RNS a93d12fc]` + text.
+  `[RNS a93d12fc]` + text, and are relayed to the channel's other LXMF
+  members (a channel is a full distribution group, not just a Signal
+  bridge).
 - Deny by default: unmapped groups, DMs, and non-member LXMF sources are
   dropped. LXMF signatures are validated before forwarding.
 - Dedup (24 h) and a prefix loop guard prevent bridge loops; oversize
