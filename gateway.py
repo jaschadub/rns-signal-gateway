@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.request
 import wave
+from concurrent.futures import ThreadPoolExecutor
 
 import LXMF
 import RNS
@@ -386,6 +387,9 @@ class Gateway:
             identity,
             display_name=cfg["gateway"].get("display_name", "Signal Gateway"),
         )
+        # bounds LXMF send fan-out; sends can block ~30s on path requests
+        self.pool = ThreadPoolExecutor(max_workers=8)
+        self.members_lock = threading.Lock()
         self.members_path = os.path.join(storage, "members.json")
         self.dynamic_members = {}
         if os.path.isfile(self.members_path):
@@ -457,7 +461,9 @@ class Gateway:
         for att in attachments:
             aid = att.get("id")
             name = att.get("filename") or aid or "file"
-            path = os.path.join(self.attachment_dir, aid) if aid else None
+            # basename: never let an upstream-supplied id escape the dir
+            path = (os.path.join(self.attachment_dir, os.path.basename(aid))
+                    if aid else None)
             if not path or not os.path.isfile(path):
                 notes.append(f"[attachment {name} unavailable]")
                 continue
@@ -506,9 +512,7 @@ class Gateway:
         body = "\n".join(p for p in [f"[Signal {name}] {text}".rstrip(),
                                      *notes] if p)
         for member in members:
-            threading.Thread(target=self.send_lxmf,
-                             args=(member, body, fields),
-                             daemon=True).start()
+            self.pool.submit(self.send_lxmf, member, body, fields)
 
     # ----- Reticulum side -----
 
@@ -536,13 +540,13 @@ class Gateway:
             RNS.Transport.request_path(message.source_hash)
             return
         if text.startswith("/"):
-            reply, changed = command_reply(self.cfg, self.dynamic_members,
-                                           sender, text)
-            if changed:
-                self.save_members()
+            with self.members_lock:
+                reply, changed = command_reply(self.cfg, self.dynamic_members,
+                                               sender, text)
+                if changed:
+                    self.save_members()
             RNS.log(f"Command from {sender}: {text.split()[0]}", RNS.LOG_INFO)
-            threading.Thread(target=self.send_lxmf, args=(sender, reply),
-                             daemon=True).start()
+            self.pool.submit(self.send_lxmf, sender, reply)
             return
         if len(message.content) > self.max_bytes:
             RNS.log(f"Dropping oversize LXMF message ({len(message.content)} "
