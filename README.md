@@ -123,7 +123,9 @@ at its own config dir, e.g.:
 [reticulum]
   enable_transport = False
   share_instance = False
-  panic_on_interface_error = False
+  # exit on unrecoverable interface errors so systemd/Docker restarts the
+  # gateway with a fresh connection instead of running disconnected
+  panic_on_interface_error = True
 
 [logging]
   loglevel = 4
