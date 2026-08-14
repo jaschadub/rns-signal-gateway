@@ -613,6 +613,12 @@ class Gateway:
             lxm = LXMF.LXMessage(destination, self.dest, text,
                                  fields=fields or None,
                                  desired_method=LXMF.LXMessage.DIRECT)
+            lxm.register_delivery_callback(
+                lambda m, d=dest_hex: RNS.log(f"LXMF delivered to {d}",
+                                              RNS.LOG_INFO))
+            lxm.register_failed_callback(
+                lambda m, d=dest_hex: RNS.log(f"LXMF delivery FAILED to {d}",
+                                              RNS.LOG_WARNING))
             self.router.handle_outbound(lxm)
         except Exception as e:  # noqa: BLE001 - daemon must survive bad messages
             RNS.log(f"LXMF send to {dest_hex} failed: {e}", RNS.LOG_ERROR)
