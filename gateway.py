@@ -383,9 +383,13 @@ class Gateway:
             # rejected before the gateway sees them, so keep it above the
             # largest attachment you want to be able to downscale/bridge
             delivery_limit=delivery_limit_kb)
+        # optional inbound stamp cost (proof-of-work spam deterrence);
+        # outbound stamps for members that require them are automatic
+        self.stamp_cost = cfg["gateway"].get("stamp_cost")
         self.dest = self.router.register_delivery_identity(
             identity,
             display_name=cfg["gateway"].get("display_name", "Signal Gateway"),
+            stamp_cost=self.stamp_cost,
         )
         # bounds LXMF send fan-out; sends can block ~30s on path requests
         self.pool = ThreadPoolExecutor(max_workers=8)
@@ -612,7 +616,8 @@ class Gateway:
                 "lxmf", "delivery")
             lxm = LXMF.LXMessage(destination, self.dest, text,
                                  fields=fields or None,
-                                 desired_method=LXMF.LXMessage.DIRECT)
+                                 desired_method=LXMF.LXMessage.DIRECT,
+                                 include_ticket=self.stamp_cost is not None)
             lxm.register_delivery_callback(
                 lambda m, d=dest_hex: RNS.log(f"LXMF delivered to {d}",
                                               RNS.LOG_INFO))

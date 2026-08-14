@@ -7,6 +7,10 @@ storage = "/var/lib/rns-signal"
 max_message_bytes = 4096     # drop larger text (LoRa-friendly)
 max_attachment_bytes = 1000000  # drop larger attachments, keep the text
 announce_interval = 3600     # seconds between LXMF announces
+# Require LXMF stamps (proof-of-work) on inbound messages; senders' clients
+# generate them automatically. Outbound messages include tickets so members
+# can reply without the work. Omit to accept unstamped messages.
+# stamp_cost = 8
 # Transcode Signal voice notes to codec2 FIELD_AUDIO at this bitrate
 # (450/700/1200/1300/1400/1600/2400/3200) — tiny and LoRa-friendly, plays
 # in Sideband's voice UI. Needs ffmpeg + pycodec2. Omit to pass audio
