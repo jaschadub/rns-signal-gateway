@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.0 — 2026-08-15
+
+- Store-and-forward via LXMF propagation nodes: failed direct deliveries
+  are retried as PROPAGATED, so offline members receive messages when
+  they reconnect; the gateway also syncs its own mailbox from the node
+  each announce interval to recover messages parked during downtime
+- `propagation_node = "auto"` selects the nearest active announced node
+  and remembers it across restarts; an explicit node hash also works
+- README documents the trusted man-in-the-middle privacy implications of
+  bridging: plaintext at the gateway, operator capabilities, attribution
+  being convention rather than cryptography, and metadata visibility
+
 ## v0.3.0 — 2026-08-14
 
 - Channels are full distribution groups: LXMF member posts relay to the
