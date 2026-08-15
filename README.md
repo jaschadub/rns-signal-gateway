@@ -314,9 +314,32 @@ state in `docker-data/gateway/storage` — back both up, and don't commit
 
 ## Security notes
 
-The gateway is a **trusted endpoint**, not a transparent E2E bridge: LXMF
-messages are decrypted at the gateway and re-encrypted by Signal, and vice
-versa. Practical consequences:
+### The gateway is a trusted man-in-the-middle
+
+Signal's end-to-end encryption ends *at the gateway*, and Reticulum's
+ends there too. Every bridged message — text, image, file, voice — exists
+as **plaintext in the gateway's memory** while it crosses, and parts
+touch disk (signal-cli's attachment store, temporary files during
+attachment sends). Nobody in a bridged conversation has end-to-end
+encryption with the person on the other network; they have E2E with the
+gateway, which re-encrypts on their behalf.
+
+Concretely, whoever operates the gateway host can read, alter, inject,
+or drop any bridged message, and a compromise of the host exposes all
+bridged traffic from that point on — plus whatever history lives in the
+Signal account data and logs. Signal participants also see bridged
+messages as coming from the gateway's Signal account (with an
+`[RNS ...]` prefix), not from a distinct Signal identity per Reticulum
+user, and vice versa — attribution inside the message text is a
+convention, not cryptography. Metadata (who talks to whom, when, how
+much) is fully visible to the gateway even beyond content.
+
+**Everyone in a bridged channel should know the bridge exists and trust
+its operator** to roughly the same degree they'd trust them running a
+group chat server that can read everything. If a conversation needs true
+end-to-end privacy, keep it native to one network — don't bridge it.
+
+Practical consequences for deployment:
 
 - Run it on a dedicated host/VM you control.
 - Keep the signal-cli HTTP port on localhost.
