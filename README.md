@@ -35,6 +35,10 @@ Signal group  <->  signal-cli  <->  gateway  <->  LXMF  <->  Reticulum users
   other oversize attachments are dropped with a note in the bridged text,
   so radio-bound channels can set a small cap without losing the
   conversation.
+- Store-and-forward: with `propagation_node` set ("auto" or a node hash),
+  deliveries to offline members are handed to an LXMF propagation node
+  and picked up when they reconnect, and the gateway syncs its own
+  mailbox from the node after downtime.
 - Voice memos bridge both ways. Reticulum → Signal: Opus voice arrives as
   a playable `.ogg`; codec2 voice is decoded to a playable `.wav` when
   `pycodec2` is installed (raw `.c2` otherwise). Signal → Reticulum: set

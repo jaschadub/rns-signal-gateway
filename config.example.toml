@@ -11,6 +11,11 @@ announce_interval = 3600     # seconds between LXMF announces
 # generate them automatically. Outbound messages include tickets so members
 # can reply without the work. Omit to accept unstamped messages.
 # stamp_cost = 8
+# Store-and-forward for offline members: failed direct deliveries are
+# handed to an LXMF propagation node, and the gateway syncs its own
+# mailbox from it. "auto" picks the nearest announced node (remembered
+# across restarts); or set an explicit propagation node hash.
+# propagation_node = "auto"
 # Transcode Signal voice notes to codec2 FIELD_AUDIO at this bitrate
 # (450/700/1200/1300/1400/1600/2400/3200) — tiny and LoRa-friendly, plays
 # in Sideband's voice UI. Needs ffmpeg + pycodec2. Omit to pass audio

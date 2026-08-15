@@ -349,6 +349,30 @@ def command_reply(cfg, dynamic, sender, text):
 
 # ---------- gateway ----------
 
+class PropagationNodePicker:
+    """Announce handler that selects the closest active propagation node."""
+
+    aspect_filter = "lxmf.propagation"
+
+    def __init__(self, on_pick, hops=None):
+        self.on_pick = on_pick
+        self.hops = hops or RNS.Transport.hops_to
+        self.best = None
+
+    def received_announce(self, destination_hash, announced_identity,
+                          app_data):
+        try:
+            import RNS.vendor.umsgpack as msgpack
+            if not msgpack.unpackb(app_data)[0]:
+                return  # node announces itself as inactive
+        except Exception:  # noqa: BLE001 - unparseable announce data
+            return
+        if (self.best is None
+                or self.hops(destination_hash) < self.hops(self.best)):
+            self.best = destination_hash
+            self.on_pick(destination_hash)
+
+
 class Gateway:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -400,8 +424,33 @@ class Gateway:
             with open(self.members_path) as f:
                 self.dynamic_members = json.load(f)
 
+        # store-and-forward: hand failed DIRECT sends to a propagation
+        # node, and sync our own mailbox from it
+        self.identity = identity
+        self.propagation_state_path = os.path.join(storage,
+                                                   "propagation_node")
+        prop_cfg = cfg["gateway"].get("propagation_node")
+        if prop_cfg == "auto":
+            if os.path.isfile(self.propagation_state_path):
+                with open(self.propagation_state_path) as f:
+                    remembered = f.read().strip()
+                if remembered:
+                    self.router.set_outbound_propagation_node(
+                        bytes.fromhex(remembered))
+            RNS.Transport.register_announce_handler(
+                PropagationNodePicker(self.use_propagation_node))
+        elif prop_cfg:
+            self.router.set_outbound_propagation_node(bytes.fromhex(prop_cfg))
+
         self.router.register_delivery_callback(self.on_lxmf)
         RNS.log(f"Gateway LXMF address: {RNS.prettyhexrep(self.dest.hash)}",
+                RNS.LOG_NOTICE)
+
+    def use_propagation_node(self, dest_hash):
+        self.router.set_outbound_propagation_node(dest_hash)
+        with open(self.propagation_state_path, "w") as f:
+            f.write(dest_hash.hex())
+        RNS.log(f"Using propagation node {RNS.prettyhexrep(dest_hash)}",
                 RNS.LOG_NOTICE)
 
     def save_members(self):
@@ -597,8 +646,9 @@ class Gateway:
                 f"{len(peers)} LXMF member(s) on '{channel['name']}'",
                 RNS.LOG_INFO)
 
-    def send_lxmf(self, dest_hex, text, fields=None):
+    def send_lxmf(self, dest_hex, text, fields=None, method=None):
         try:
+            method = method or LXMF.LXMessage.DIRECT
             dest_hash = bytes.fromhex(dest_hex)
             if not RNS.Transport.has_path(dest_hash):
                 RNS.Transport.request_path(dest_hash)
@@ -616,23 +666,36 @@ class Gateway:
                 "lxmf", "delivery")
             lxm = LXMF.LXMessage(destination, self.dest, text,
                                  fields=fields or None,
-                                 desired_method=LXMF.LXMessage.DIRECT,
+                                 desired_method=method,
                                  include_ticket=self.stamp_cost is not None)
             lxm.register_delivery_callback(
                 lambda m, d=dest_hex: RNS.log(f"LXMF delivered to {d}",
                                               RNS.LOG_INFO))
             lxm.register_failed_callback(
-                lambda m, d=dest_hex: RNS.log(f"LXMF delivery FAILED to {d}",
-                                              RNS.LOG_WARNING))
+                lambda m: self.on_send_failed(dest_hex, text, fields, method))
             self.router.handle_outbound(lxm)
         except Exception as e:  # noqa: BLE001 - daemon must survive bad messages
             RNS.log(f"LXMF send to {dest_hex} failed: {e}", RNS.LOG_ERROR)
+
+    def on_send_failed(self, dest_hex, text, fields, method):
+        if (method == LXMF.LXMessage.DIRECT
+                and self.router.get_outbound_propagation_node() is not None):
+            RNS.log(f"Direct delivery to {dest_hex} failed, handing to "
+                    f"propagation node", RNS.LOG_INFO)
+            self.pool.submit(self.send_lxmf, dest_hex, text, fields,
+                             LXMF.LXMessage.PROPAGATED)
+        else:
+            RNS.log(f"LXMF delivery FAILED to {dest_hex}", RNS.LOG_WARNING)
 
     def run(self):
         threading.Thread(target=self.sse_loop, daemon=True).start()
         interval = self.cfg["gateway"].get("announce_interval", 3600)
         while True:
             self.router.announce(self.dest.hash)
+            if self.router.get_outbound_propagation_node() is not None:
+                # fetch messages senders parked for us while we were down
+                self.router.request_messages_from_propagation_node(
+                    self.identity)
             time.sleep(interval)
 
 
