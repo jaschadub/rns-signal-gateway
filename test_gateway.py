@@ -169,6 +169,22 @@ assert command_reply(cfg2, dyn, "bb22", "/leave camp") == ("Left camp", True)
 assert dyn == {"camp": []}
 assert command_reply(cfg2, dyn, "aa11", "/leave ops")[1] is False  # static
 assert command_reply(cfg2, dyn, "bb22", "/help")[0].startswith("Commands:")
+
+# propagation node picker: nearest active node wins, inactive ignored
+import RNS.vendor.umsgpack as msgpack
+
+from gateway import PropagationNodePicker
+
+picks = []
+hops = {b"far": 5, b"near": 2, b"nearer": 1}
+picker = PropagationNodePicker(picks.append, hops=lambda h: hops[h])
+active = msgpack.packb([True, 0])
+picker.received_announce(b"far", None, active)
+picker.received_announce(b"near", None, active)
+picker.received_announce(b"far", None, active)          # not better
+picker.received_announce(b"nearer", None, msgpack.packb([False, 0]))
+picker.received_announce(b"bogus", None, b"\xff")       # unparseable
+assert picks == [b"far", b"near"]
 assert lxmf_attachments(None, 5) == ([], [])
 assert lxmf_attachments({LXMF.FIELD_FILE_ATTACHMENTS:
                          [["../evil", b"x"]]}, 5)[0] == [("evil", b"x")]
