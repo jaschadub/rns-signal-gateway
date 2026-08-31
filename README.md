@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+> This project has been superseded by [RelayFabric](https://github.com/RelayFabric/RelayFabric), which supports plugins for Signal and additional protocols.
+
+
 # rns-signal-gateway
 
 Bidirectional bridge between [Reticulum](https://reticulum.network)
